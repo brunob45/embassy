@@ -56,7 +56,6 @@
 #![no_std]
 #![no_main]
 
-use cortex_m::asm;
 use cortex_m_rt::entry;
 use defmt::*;
 use embassy_executor::{Executor, InterruptExecutor};
@@ -124,14 +123,9 @@ unsafe fn UART5() {
 
 #[entry]
 fn main() -> ! {
-    loop {
-        asm::nop();
-    }
+    info!("Hello World!");
 
-    // info!("Hello World!");
-
-    // let _p = embassy_stm32::init(Default::default());
-
+    let _p = embassy_stm32::init(Default::default());
 
     // STM32s don’t have any interrupts exclusively for software use, but they can all be triggered by software as well as
     // by the peripheral, so we can just use any free interrupt vectors which aren’t used by the rest of your application.
@@ -139,18 +133,18 @@ fn main() -> ! {
     // vector would work exactly the same.
 
     // High-priority executor: UART4, priority level 6
-    // interrupt::UART4.set_priority(Priority::P6);
-    // let spawner = EXECUTOR_HIGH.start(interrupt::UART4);
-    // unwrap!(spawner.spawn(run_high()));
+    interrupt::UART4.set_priority(Priority::P6);
+    let spawner = EXECUTOR_HIGH.start(interrupt::UART4);
+    unwrap!(spawner.spawn(run_high()));
 
-    // // Medium-priority executor: UART5, priority level 7
-    // interrupt::UART5.set_priority(Priority::P7);
-    // let spawner = EXECUTOR_MED.start(interrupt::UART5);
-    // unwrap!(spawner.spawn(run_med()));
+    // Medium-priority executor: UART5, priority level 7
+    interrupt::UART5.set_priority(Priority::P7);
+    let spawner = EXECUTOR_MED.start(interrupt::UART5);
+    unwrap!(spawner.spawn(run_med()));
 
-    // // Low priority executor: runs in thread mode, using WFE/SEV
-    // let executor = EXECUTOR_LOW.init(Executor::new());
-    // executor.run(|spawner| {
-    //     unwrap!(spawner.spawn(run_low()));
-    // });
+    // Low priority executor: runs in thread mode, using WFE/SEV
+    let executor = EXECUTOR_LOW.init(Executor::new());
+    executor.run(|spawner| {
+        unwrap!(spawner.spawn(run_low()));
+    });
 }
