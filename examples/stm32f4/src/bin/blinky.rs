@@ -3,8 +3,9 @@
 
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_stm32::gpio::{Level, Output, Speed};
-use embassy_time::{Hertz, Timer};
+use embassy_stm32::gpio::{Input, Level, Output, Speed};
+use embassy_stm32::time::Hertz;
+use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
 
 #[embassy_executor::main]
@@ -14,10 +15,13 @@ async fn main(_spawner: Spawner) {
     info!("Hello World!");
 
     let mut led = Output::new(p.PB2, Level::High, Speed::Low);
+    let mut key = Input::new(p.PC13, Pull::Low);
 
     loop {
         info!("high");
-        led.set_high();
+        if key.is_low() {
+            led.set_high();
+        }
         Timer::after_millis(300).await;
 
         info!("low");
@@ -30,7 +34,7 @@ fn embassy_init() -> embassy_stm32::Peripherals {
     use embassy_stm32::rcc::*;
 
     let mut config = embassy_stm32::Config::default();
-    
+
     config.rcc.hse = Some(Hse {
         freq: Hertz(8_000_000),
         mode: HseMode::Bypass,
