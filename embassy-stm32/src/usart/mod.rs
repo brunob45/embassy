@@ -9,9 +9,9 @@ use core::task::Poll;
 
 use embassy_embedded_hal::SetConfig;
 use embassy_hal_internal::drop::OnDrop;
-use embassy_hal_internal::{into_ref, PeripheralRef};
+use embassy_hal_internal::PeripheralRef;
 use embassy_sync::waitqueue::AtomicWaker;
-use futures::future::{select, Either};
+use futures_util::future::{select, Either};
 
 use crate::dma::ChannelAndRequest;
 use crate::gpio::{AFType, AnyPin, SealedPin};
@@ -359,15 +359,31 @@ impl<'d, T: BasicInstance> UartTx<'d, T, Async> {
 
     /// Initiate an asynchronous UART write
     pub async fn write(&mut self, buffer: &[u8]) -> Result<(), Error> {
+        let r = T::regs();
+
+        // Disable Receiver for Half-Duplex mode
+        if r.cr3().read().hdsel() {
+            r.cr1().modify(|reg| reg.set_re(false));
+        }
+
         let ch = self.tx_dma.as_mut().unwrap();
-        T::regs().cr3().modify(|reg| {
+        r.cr3().modify(|reg| {
             reg.set_dmat(true);
         });
         // If we don't assign future to a variable, the data register pointer
         // is held across an await and makes the future non-Send.
-        let transfer = unsafe { ch.write(buffer, tdr(T::regs()), Default::default()) };
+        let transfer = unsafe { ch.write(buffer, tdr(r), Default::default()) };
         transfer.await;
         Ok(())
+    }
+
+    async fn flush_inner() -> Result<(), Error> {
+        Self::blocking_flush_inner()
+    }
+
+    /// Wait until transmission complete
+    pub async fn flush(&mut self) -> Result<(), Error> {
+        Self::flush_inner().await
     }
 }
 
@@ -436,6 +452,12 @@ impl<'d, T: BasicInstance, M: Mode> UartTx<'d, T, M> {
     /// Perform a blocking UART write
     pub fn blocking_write(&mut self, buffer: &[u8]) -> Result<(), Error> {
         let r = T::regs();
+
+        // Disable Receiver for Half-Duplex mode
+        if r.cr3().read().hdsel() {
+            r.cr1().modify(|reg| reg.set_re(false));
+        }
+
         for &b in buffer {
             while !sr(r).read().txe() {}
             unsafe { tdr(r).write_volatile(b) };
@@ -443,11 +465,20 @@ impl<'d, T: BasicInstance, M: Mode> UartTx<'d, T, M> {
         Ok(())
     }
 
-    /// Block until transmission complete
-    pub fn blocking_flush(&mut self) -> Result<(), Error> {
+    fn blocking_flush_inner() -> Result<(), Error> {
         let r = T::regs();
         while !sr(r).read().tc() {}
+
+        // Enable Receiver after transmission complete for Half-Duplex mode
+        if r.cr3().read().hdsel() {
+            r.cr1().modify(|reg| reg.set_re(true));
+        }
         Ok(())
+    }
+
+    /// Block until transmission complete
+    pub fn blocking_flush(&mut self) -> Result<(), Error> {
+        Self::blocking_flush_inner()
     }
 }
 
@@ -501,6 +532,11 @@ impl<'d, T: BasicInstance> UartRx<'d, T, Async> {
         enable_idle_line_detection: bool,
     ) -> Result<ReadCompletionEvent, Error> {
         let r = T::regs();
+
+        // Call flush for Half-Duplex mode. It prevents reading of bytes which have just been written.
+        if r.cr3().read().hdsel() {
+            UartTx::<'d, T, Async>::flush_inner().await?;
+        }
 
         // make sure USART state is restored to neutral state when this future is dropped
         let on_drop = OnDrop::new(move || {
@@ -825,6 +861,12 @@ impl<'d, T: BasicInstance, M: Mode> UartRx<'d, T, M> {
     /// Perform a blocking read into `buffer`
     pub fn blocking_read(&mut self, buffer: &mut [u8]) -> Result<(), Error> {
         let r = T::regs();
+
+        // Call flush for Half-Duplex mode. It prevents reading of bytes which have just been written.
+        if r.cr3().read().hdsel() {
+            UartTx::<'d, T, M>::blocking_flush_inner()?;
+        }
+
         for b in buffer {
             while !self.check_rx_flags()? {}
             unsafe { *b = rdr(r).read_volatile() }
@@ -926,8 +968,9 @@ impl<'d, T: BasicInstance> Uart<'d, T, Async> {
 
     /// Create a single-wire half-duplex Uart transceiver on a single Tx pin.
     ///
-    /// See [`new_half_duplex_on_rx`][`Self::new_half_duplex_on_rx`] if you would prefer to use an Rx pin.
-    /// There is no functional difference between these methods, as both allow bidirectional communication.
+    /// See [`new_half_duplex_on_rx`][`Self::new_half_duplex_on_rx`] if you would prefer to use an Rx pin
+    /// (when it is available for your chip). There is no functional difference between these methods, as both
+    /// allow bidirectional communication.
     ///
     /// The pin is always released when no data is transmitted. Thus, it acts as a standard
     /// I/O in idle or in reception.
@@ -1079,8 +1122,9 @@ impl<'d, T: BasicInstance> Uart<'d, T, Blocking> {
 
     /// Create a single-wire half-duplex Uart transceiver on a single Tx pin.
     ///
-    /// See [`new_half_duplex_on_rx`][`Self::new_half_duplex_on_rx`] if you would prefer to use an Rx pin.
-    /// There is no functional difference between these methods, as both allow bidirectional communication.
+    /// See [`new_half_duplex_on_rx`][`Self::new_half_duplex_on_rx`] if you would prefer to use an Rx pin
+    /// (when it is available for your chip). There is no functional difference between these methods, as both
+    /// allow bidirectional communication.
     ///
     /// The pin is always released when no data is transmitted. Thus, it acts as a standard
     /// I/O in idle or in reception.
@@ -1270,8 +1314,14 @@ fn configure(
 
     let (mul, brr_min, brr_max) = match kind {
         #[cfg(any(usart_v3, usart_v4))]
-        Kind::Lpuart => (256, 0x300, 0x10_0000),
-        Kind::Uart => (1, 0x10, 0x1_0000),
+        Kind::Lpuart => {
+            trace!("USART: Kind::Lpuart");
+            (256, 0x300, 0x10_0000)
+        }
+        Kind::Uart => {
+            trace!("USART: Kind::Uart");
+            (1, 0x10, 0x1_0000)
+        }
     };
 
     fn calculate_brr(baud: u32, pclk: u32, presc: u32, mul: u32) -> u32 {
@@ -1374,21 +1424,35 @@ fn configure(
         // configure word size
         // if using odd or even parity it must be configured to 9bits
         w.set_m0(if config.parity != Parity::ParityNone {
+            trace!("USART: m0: vals::M0::BIT9");
             vals::M0::BIT9
         } else {
+            trace!("USART: m0: vals::M0::BIT8");
             vals::M0::BIT8
         });
         // configure parity
         w.set_pce(config.parity != Parity::ParityNone);
         w.set_ps(match config.parity {
-            Parity::ParityOdd => vals::Ps::ODD,
-            Parity::ParityEven => vals::Ps::EVEN,
-            _ => vals::Ps::EVEN,
+            Parity::ParityOdd => {
+                trace!("USART: set_ps: vals::Ps::ODD");
+                vals::Ps::ODD
+            }
+            Parity::ParityEven => {
+                trace!("USART: set_ps: vals::Ps::EVEN");
+                vals::Ps::EVEN
+            }
+            _ => {
+                trace!("USART: set_ps: vals::Ps::EVEN");
+                vals::Ps::EVEN
+            }
         });
         #[cfg(not(usart_v1))]
         w.set_over8(vals::Over8::from_bits(over8 as _));
         #[cfg(usart_v4)]
-        w.set_fifoen(true);
+        {
+            trace!("USART: set_fifoen: true (usart_v4)");
+            w.set_fifoen(true);
+        }
     });
 
     Ok(())
