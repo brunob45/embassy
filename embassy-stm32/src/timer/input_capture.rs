@@ -9,7 +9,7 @@ use embassy_hal_internal::{into_ref, PeripheralRef};
 
 use super::low_level::{CountingMode, FilterValue, InputCaptureMode, InputTISelection, Timer};
 use super::{
-    CaptureCompareInterruptHandler, Channel, Channel1Pin, Channel2Pin, Channel3Pin, Channel4Pin,
+    InterruptHandler, Channel, Channel1Pin, Channel2Pin, Channel3Pin, Channel4Pin,
     GeneralInstance4Channel,
 };
 use crate::gpio::{AFType, AnyPin, Pull};
@@ -70,7 +70,7 @@ impl<'d, T: GeneralInstance4Channel> InputCapture<'d, T> {
         _ch2: Option<CapturePin<'d, T, Ch2>>,
         _ch3: Option<CapturePin<'d, T, Ch3>>,
         _ch4: Option<CapturePin<'d, T, Ch4>>,
-        _irq: impl Binding<T::CaptureCompareInterrupt, CaptureCompareInterruptHandler<T>> + 'd,
+        _irq: impl Binding<T::UpdateInterrupt, InterruptHandler<T>> + 'd,
         freq: Hertz,
         counting_mode: CountingMode,
     ) -> Self {
@@ -135,12 +135,8 @@ impl<'d, T: GeneralInstance4Channel> InputCapture<'d, T> {
         self.inner.set_input_capture_mode(channel, mode);
         self.inner.set_input_capture_prescaler(channel, 0);
         self.inner.enable_channel(channel, true);
-        self.inner.enable_input_interrupt(channel, true);
 
-        InputCaptureFuture {
-            channel,
-            phantom: PhantomData,
-        }
+        InputCaptureFuture::new(InterruptFlag::from(channel))
     }
 
     /// Asynchronously wait until the pin sees a rising edge.
@@ -180,10 +176,73 @@ impl<'d, T: GeneralInstance4Channel> InputCapture<'d, T> {
     }
 }
 
+/// All the timer interrupt flags
+#[derive(Clone, Copy)]
+pub enum InterruptFlag {
+    /// Update interrupt
+    Update,
+    /// Capture/Compare 1 interrupt
+    CaptureCompare1,
+    /// Capture/Compare 2 interrupt
+    CaptureCompare2,
+    /// Capture/Compare 3 interrupt
+    CaptureCompare3,
+    /// Capture/Compare 4 interrupt
+    CaptureCompare4,
+    /// COM interrupt
+    ComEvent,
+    /// Trigger interrupt
+    Trigger,
+    /// Break interrupt
+    Break,
+}
+
+impl From<InterruptFlag> for u32 {
+    fn from(value: InterruptFlag) -> Self {
+        match value {
+            InterruptFlag::Update => 1 << 0,
+            InterruptFlag::CaptureCompare1 => 1 << 1,
+            InterruptFlag::CaptureCompare2 => 1 << 2,
+            InterruptFlag::CaptureCompare3 => 1 << 3,
+            InterruptFlag::CaptureCompare4 => 1 << 4,
+            InterruptFlag::ComEvent => 1 << 5,
+            InterruptFlag::Trigger => 1 << 6,
+            InterruptFlag::Break => 1 << 7,
+        }
+    }
+}
+
+impl From<Channel> for InterruptFlag {
+    fn from(value: Channel) -> Self {
+        match value {
+            Channel::Ch1 => InterruptFlag::CaptureCompare1,
+            Channel::Ch2 => InterruptFlag::CaptureCompare2,
+            Channel::Ch3 => InterruptFlag::CaptureCompare3,
+            Channel::Ch4 => InterruptFlag::CaptureCompare4,
+        }
+    }
+}
+
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 struct InputCaptureFuture<T: GeneralInstance4Channel> {
-    channel: Channel,
+    flag: InterruptFlag,
     phantom: PhantomData<T>,
+}
+
+impl<T: GeneralInstance4Channel> InputCaptureFuture<T> {
+    pub fn new(flag: InterruptFlag) -> Self {
+        critical_section::with(|_| {
+            let regs = unsafe { crate::pac::timer::TimGp16::from_ptr(T::regs()) };
+
+            // disable interrupt enable
+            regs.dier().modify(|w| w.0 |= u32::from(flag));
+        });
+
+        Self {
+            flag,
+            phantom: PhantomData,
+        }
+    }
 }
 
 impl<T: GeneralInstance4Channel> Drop for InputCaptureFuture<T> {
@@ -192,7 +251,7 @@ impl<T: GeneralInstance4Channel> Drop for InputCaptureFuture<T> {
             let regs = unsafe { crate::pac::timer::TimGp16::from_ptr(T::regs()) };
 
             // disable interrupt enable
-            regs.dier().modify(|w| w.set_ccie(self.channel.index(), false));
+            regs.dier().modify(|w| w.0 &= !u32::from(self.flag));
         });
     }
 }
@@ -201,13 +260,19 @@ impl<T: GeneralInstance4Channel> Future for InputCaptureFuture<T> {
     type Output = u32;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        T::state().cc_waker[self.channel.index()].register(cx.waker());
+        T::state().wakers[u32::from(self.flag) as usize].register(cx.waker());
 
         let regs = unsafe { crate::pac::timer::TimGp16::from_ptr(T::regs()) };
-
         let dier = regs.dier().read();
-        if !dier.ccie(self.channel.index()) {
-            let val = regs.ccr(self.channel.index()).read().0;
+        let enabled = (dier.0 & u32::from(self.flag)) != 0;
+        if !enabled {
+            let val = match self.flag {
+                InterruptFlag::CaptureCompare1 => regs.ccr(1).read().0,
+                InterruptFlag::CaptureCompare2 => regs.ccr(2).read().0,
+                InterruptFlag::CaptureCompare3 => regs.ccr(3).read().0,
+                InterruptFlag::CaptureCompare4 => regs.ccr(4).read().0,
+                _ => regs.cnt().read().0,
+            };
             Poll::Ready(val)
         } else {
             Poll::Pending

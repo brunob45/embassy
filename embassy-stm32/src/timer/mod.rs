@@ -52,16 +52,14 @@ pub enum TimerBits {
 }
 
 struct State {
-    up_waker: AtomicWaker,
-    cc_waker: [AtomicWaker; 4],
+    wakers: [AtomicWaker; 8],
 }
 
 impl State {
     const fn new() -> Self {
         const NEW_AW: AtomicWaker = AtomicWaker::new();
         Self {
-            up_waker: NEW_AW,
-            cc_waker: [NEW_AW; 4],
+            wakers: [NEW_AW; 8],
         }
     }
 }
@@ -320,12 +318,12 @@ foreach_interrupt! {
     };
 }
 
-/// Update interrupt handler.
-pub struct UpdateInterruptHandler<T: CoreInstance> {
+/// Interrupt handler.
+pub struct InterruptHandler<T: CoreInstance> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: CoreInstance> interrupt::typelevel::Handler<T::UpdateInterrupt> for UpdateInterruptHandler<T> {
+impl<T: CoreInstance> interrupt::typelevel::Handler<T::UpdateInterrupt> for InterruptHandler<T> {
     unsafe fn on_interrupt() {
         #[cfg(feature = "low-power")]
         crate::low_power::on_wakeup_irq();
@@ -335,46 +333,30 @@ impl<T: CoreInstance> interrupt::typelevel::Handler<T::UpdateInterrupt> for Upda
         // Read TIM interrupt flags.
         let sr = regs.sr().read();
 
-        // Mask relevant interrupts (UIE).
-        let bits = sr.0 & 0x00000001;
+        // Mask relevant interrupts flags (bits 0..7).
+        let bits = sr.0 & 0x000000FF;
 
         // Mask all the channels that fired.
         regs.dier().modify(|w| w.0 &= !bits);
 
         // Wake the tasks
-        if sr.uif() {
-            T::state().up_waker.wake();
+        for flag in BitIter(bits) {
+            T::state().wakers[flag as usize].wake();
         }
     }
 }
 
-/// Capture/Compare interrupt handler.
-pub struct CaptureCompareInterruptHandler<T: GeneralInstance1Channel> {
-    _phantom: PhantomData<T>,
-}
+struct BitIter(u32);
 
-impl<T: GeneralInstance1Channel> interrupt::typelevel::Handler<T::CaptureCompareInterrupt>
-    for CaptureCompareInterruptHandler<T>
-{
-    unsafe fn on_interrupt() {
-        #[cfg(feature = "low-power")]
-        crate::low_power::on_wakeup_irq();
+impl Iterator for BitIter {
+    type Item = u32;
 
-        let regs = crate::pac::timer::TimGp16::from_ptr(T::regs());
-
-        // Read TIM interrupt flags.
-        let sr = regs.sr().read();
-
-        // Mask relevant interrupts (CCIE).
-        let bits = sr.0 & 0x0000001E;
-
-        // Mask all the channels that fired.
-        regs.dier().modify(|w| w.0 &= !bits);
-
-        // Wake the tasks
-        for ch in 0..4 {
-            if sr.ccif(ch) {
-                T::state().cc_waker[ch].wake();
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.0.trailing_zeros() {
+            32 => None,
+            b => {
+                self.0 &= !(1 << b);
+                Some(b)
             }
         }
     }
