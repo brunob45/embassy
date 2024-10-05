@@ -164,7 +164,9 @@ impl TimerCore for MyTimer {
 }
 
 pub trait TimerCore {
+    // TIM2,3,4,5,9,12
     fn regs(&self) -> pac::timer::TimCore;
+
     fn write_counter_enable(&self, val: bool) {
         self.regs().cr1().modify(|r| r.set_cen(val));
     }
@@ -195,33 +197,39 @@ pub trait TimerCore {
     fn read_autoreload_preload_enable(&self) -> bool {
         self.regs().cr1().read().arpe()
     }
+    
     fn write_update_interrupt_enable(&self, val: bool) {
         self.regs().dier().modify(|r| r.set_uie(val))
     }
     fn read_update_interrupt_enable(&self) -> bool {
         self.regs().dier().read().uie()
     }
+
     fn write_update_interrupt_flag(&self, val: bool) {
         self.regs().sr().modify(|r| r.set_uif(val))
     }
     fn read_update_interrupt_flag(&self) -> bool {
         self.regs().sr().read().uif()
     }
+
     fn write_update_generation(&self) {
         self.regs().egr().write(|r| r.set_ug(true))
     }
+
     fn write_counter(&self, val: u16) {
         self.regs().cnt().write(|r| r.set_cnt(val))
     }
     fn read_counter(&self) -> u16 {
         self.regs().cnt().read().cnt()
     }
+
     fn write_prescaler(&self, val: u16) {
         self.regs().psc().write(|r| *r = val);
     }
     fn read_prescaler(&self) -> u16 {
         self.regs().psc().read()
     }
+
     fn write_auto_reload_register(&self, val: u16) {
         self.regs().arr().write(|r| r.set_arr(val));
     }
@@ -230,8 +238,38 @@ pub trait TimerCore {
     }
 }
 
-pub trait TimerGp16: TimerCore {
+pub trait TimerCore2: TimerCore {
+    // TIM2,3,4,5,9,12 - external trigger
     fn regs_gp16(&self) -> pac::timer::TimGp16;
+
+    fn write_clock_division(&self, val: pac::timer::vals::Ckd) {
+        self.regs_gp16().cr1().modify(|r| r.set_ckd(val))
+    }
+    fn read_clock_division(&self) -> pac::timer::vals::Ckd {
+        self.regs_gp16().cr1().read().ckd()
+    }
+
+    fn write_trigger_interrupt_enable(&self, val: bool) {
+        self.regs_gp16().dier().modify(|r| r.set_tie(val));
+    }
+    fn read_trigger_interrupt_enable(&self) -> bool {
+        self.regs_gp16().dier().read().tie()
+    }
+    
+    fn write_trigger_interrupt_flag(&self, val: bool) {
+        self.regs_gp16().sr().modify(|r| r.set_tif(val));
+    }
+    fn read_trigger_interrupt_flag(&self) -> bool {
+        self.regs_gp16().sr().read().tif()
+    }
+    
+    fn write_trigger_generation(&self) {
+        self.regs_gp16().egr().write(|r| r.set_tg(true))
+    }
+}
+
+pub trait TimerGp16: TimerCore2 {
+    // TIM2,3,4,5 - center-aligned mode / encoder mode
     fn write_direction(&self, val: pac::timer::vals::Dir) {
         self.regs_gp16().cr1().modify(|r| r.set_dir(val))
     }
@@ -243,18 +281,6 @@ pub trait TimerGp16: TimerCore {
     }
     fn read_centeraligned_mode_selection(&self) -> pac::timer::vals::Cms {
         self.regs_gp16().cr1().read().cms()
-    }
-    fn write_clock_division(&self, val: pac::timer::vals::Ckd) {
-        self.regs_gp16().cr1().modify(|r| r.set_ckd(val))
-    }
-    fn read_clock_division(&self) -> pac::timer::vals::Ckd {
-        self.regs_gp16().cr1().read().ckd()
-    }
-    fn write_dma_selection(&self, val: pac::timer::vals::Ccds) {
-        self.regs_gp16().cr2().modify(|r| r.set_ccds(val));
-    }
-    fn read_dma_selection(&self) -> pac::timer::vals::Ccds {
-        self.regs_gp16().cr2().read().ccds()
     }
     fn write_master_mode_selection(&self, val: pac::timer::vals::Mms) {
         self.regs_gp16().cr2().modify(|r| r.set_mms(val));
@@ -268,12 +294,17 @@ pub trait TimerGp16: TimerCore {
     fn read_ti1_selection(&self) -> pac::timer::vals::Ti1s {
         self.regs_gp16().cr2().read().ti1s()
     }
-    fn write_trigger_interrupt_enable(&self, val: bool) {
-        self.regs_gp16().dier().modify(|r| r.set_tie(val));
+}
+
+pub trait TimerWithDMA: TimerGp16 {
+    // TIM2,3,4,5
+    fn write_dma_selection(&self, val: pac::timer::vals::Ccds) {
+        self.regs_gp16().cr2().modify(|r| r.set_ccds(val));
     }
-    fn read_trigger_interrupt_enable(&self) -> bool {
-        self.regs_gp16().dier().read().tie()
+    fn read_dma_selection(&self) -> pac::timer::vals::Ccds {
+        self.regs_gp16().cr2().read().ccds()
     }
+
     fn write_update_dms_request_enable(&self, val: bool) {
         self.regs_gp16().dier().modify(|r| r.set_ude(val));
     }
@@ -287,15 +318,6 @@ pub trait TimerGp16: TimerCore {
         self.regs_gp16().dier().read().tde()
     }
 
-    fn write_trigger_interrupt_flag(&self, val: bool) {
-        self.regs_gp16().sr().modify(|r| r.set_tif(val));
-    }
-    fn read_trigger_interrupt_flag(&self) -> bool {
-        self.regs_gp16().sr().read().tif()
-    }
-    fn write_trigger_generation(&self) {
-        self.regs_gp16().egr().write(|r| r.set_tg(true))
-    }
     fn write_dma_base_address(&self, val: u8) {
         self.regs_gp16().dcr().modify(|r| r.set_dba(val));
     }
