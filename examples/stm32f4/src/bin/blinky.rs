@@ -195,6 +195,39 @@ pub trait TimerCore {
     fn read_autoreload_preload_enable(&self) -> bool {
         self.regs().cr1().read().arpe()
     }
+    fn write_update_interrupt_enable(&self, val: bool) {
+        self.regs().dier().modify(|r| r.set_uie(val))
+    }
+    fn read_update_interrupt_enable(&self) -> bool {
+        self.regs().dier().read().uie()
+    }
+    fn write_update_interrupt_flag(&self, val: bool) {
+        self.regs().sr().modify(|r| r.set_uif(val))
+    }
+    fn read_update_interrupt_flag(&self) -> bool {
+        self.regs().sr().read().uif()
+    }
+    fn write_update_generation(&self) {
+        self.regs().egr().write(|r| r.set_ug(true))
+    }
+    fn write_counter(&self, val: u16) {
+        self.regs().cnt().write(|r| r.set_cnt(val))
+    }
+    fn read_counter(&self) -> u16 {
+        self.regs().cnt().read().cnt()
+    }
+    fn write_prescaler(&self, val: u16) {
+        self.regs().psc().write(|r| *r = val);
+    }
+    fn read_prescaler(&self) -> u16 {
+        self.regs().psc().read()
+    }
+    fn write_auto_reload_register(&self, val: u16) {
+        self.regs().arr().write(|r| r.set_arr(val));
+    }
+    fn read_auto_reload_register(&self) -> u16 {
+        self.regs().arr().read().arr()
+    }
 }
 
 pub trait TimerGp16: TimerCore {
@@ -216,6 +249,75 @@ pub trait TimerGp16: TimerCore {
     }
     fn read_clock_division(&self) -> pac::timer::vals::Ckd {
         self.regs_gp16().cr1().read().ckd()
+    }
+    fn write_dma_selection(&self, val: pac::timer::vals::Ccds) {
+        self.regs_gp16().cr2().modify(|r| r.set_ccds(val));
+    }
+    fn read_dma_selection(&self) -> pac::timer::vals::Ccds {
+        self.regs_gp16().cr2().read().ccds()
+    }
+    fn write_master_mode_selection(&self, val: pac::timer::vals::Mms) {
+        self.regs_gp16().cr2().modify(|r| r.set_mms(val));
+    }
+    fn read_master_mode_selection(&self) -> pac::timer::vals::Mms {
+        self.regs_gp16().cr2().read().mms()
+    }
+    fn write_ti1_selection(&self, val: pac::timer::vals::Ti1s) {
+        self.regs_gp16().cr2().modify(|r| r.set_ti1s(val))
+    }
+    fn read_ti1_selection(&self) -> pac::timer::vals::Ti1s {
+        self.regs_gp16().cr2().read().ti1s()
+    }
+    fn write_trigger_interrupt_enable(&self, val: bool) {
+        self.regs_gp16().dier().modify(|r| r.set_tie(val));
+    }
+    fn read_trigger_interrupt_enable(&self) -> bool {
+        self.regs_gp16().dier().read().tie()
+    }
+    fn write_update_dms_request_enable(&self, val: bool) {
+        self.regs_gp16().dier().modify(|r| r.set_ude(val));
+    }
+    fn read_update_dma_request_enable(&self)-> bool {
+        self.regs_gp16().dier().read().ude()
+    }
+    fn write_trigger_dma_request_enable(&self, val: bool) {
+        self.regs_gp16().dier().modify(|r| r.set_tde(val));
+    }
+    fn read_trigger_dma_update_enable(&self)-> bool {
+        self.regs_gp16().dier().read().tde()
+    }
+
+    fn write_trigger_interrupt_flag(&self, val: bool) {
+        self.regs_gp16().sr().modify(|r| r.set_tif(val));
+    }
+    fn read_trigger_interrupt_flag(&self) -> bool {
+        self.regs_gp16().sr().read().tif()
+    }
+    fn write_trigger_generation(&self) {
+        self.regs_gp16().egr().write(|r| r.set_tg(true))
+    }
+    fn write_dma_base_address(&self, val: u8) {
+        self.regs_gp16().dcr().modify(|r| r.set_dba(val));
+    }
+    fn read_dma_base_address(&self) -> u8 {
+        self.regs_gp16().dcr().read().dba()
+    }
+    fn write_dma_burst_length(&self, val: u8) -> Result<(), ()> {
+        if val < 18 {
+            self.regs_gp16().dcr().modify(|r| r.set_dbl(val));
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+    fn read_dma_burst_length(&self) -> u8 {
+        self.regs_gp16().dcr().read().dbl()
+    }
+    fn write_dma_register_burst_accesses(&self, val: u16) {
+        self.regs_gp16().dmar().modify(|r| r.set_dmab(val))
+    }
+    fn read_dma_register_burst_accesses(&self) -> u16 {
+        self.regs_gp16().dmar().read().dmab()
     }
 }
 
@@ -320,6 +422,13 @@ pub trait TimerCaptureCompareBase {
         // different behavior capture compare !
         // egr is write only !
         self.regs().egr().write(|r| r.set_ccg(self.ch(), true));
+    }
+    unsafe fn write_counter(&self, val: u16) {
+        // unsafe because other channels also depends on this
+        self.regs().cnt().write(|r| r.set_cnt(val))
+    }
+    fn read_counter(&self) -> u16 {
+        self.regs().cnt().read().cnt()
     }
 }
 
