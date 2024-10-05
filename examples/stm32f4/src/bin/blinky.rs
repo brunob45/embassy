@@ -10,7 +10,160 @@ use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
 use embassy_stm32::pac;
 
-pub trait TimerInner {
+pub enum ChannelAvailable {}
+pub enum ChannelAllocated {}
+
+pub trait ChannelState {}
+impl ChannelState for ChannelAvailable {}
+impl ChannelState for ChannelAllocated {}
+
+pub struct ChannelFactory<Ch1: ChannelState, Ch2: ChannelState, Ch3: ChannelState, Ch4: ChannelState> {
+    regs_ptr: *mut(),
+    phantom: PhantomData<(Ch1, Ch2, Ch3, Ch4)>,
+}
+
+impl<C2: ChannelState, C3: ChannelState, C4: ChannelState> ChannelFactory<ChannelAvailable, C2, C3, C4> {
+    pub fn get_capture_ch1(self) -> (ChannelFactory<ChannelAllocated, C2, C3, C4>, TimerCaptureChannel) {
+        let this = TimerCaptureChannel {
+            regs_ptr: self.regs_ptr,
+            channel: TimerChannel::Ch1,
+        };
+        (
+            ChannelFactory {
+                regs_ptr: self.regs_ptr,
+                phantom: PhantomData
+            },
+            this
+        )
+    }
+    pub fn get_compare_ch1(self) -> (ChannelFactory<ChannelAllocated, C2, C3, C4>, TimerCompareChannel) {
+        let this = TimerCompareChannel {
+            regs_ptr: self.regs_ptr,
+            channel: TimerChannel::Ch1,
+        };
+        (
+            ChannelFactory {
+                regs_ptr: self.regs_ptr,
+                phantom: PhantomData
+            },
+            this
+        )
+    }
+}
+
+impl<C1: ChannelState, C3: ChannelState, C4: ChannelState> ChannelFactory<C1, ChannelAvailable, C3, C4> {
+    pub fn get_capture_ch2(self) -> (ChannelFactory<C1, ChannelAllocated, C3, C4>, TimerCaptureChannel) {
+        let this = TimerCaptureChannel {
+            regs_ptr: self.regs_ptr,
+            channel: TimerChannel::Ch2,
+        };
+        (
+            ChannelFactory {
+                regs_ptr: self.regs_ptr,
+                phantom: PhantomData
+            },
+            this
+        )
+    }
+    pub fn get_compare_ch2(self) -> (ChannelFactory<C1, ChannelAllocated, C3, C4>, TimerCompareChannel) {
+        let this = TimerCompareChannel {
+            regs_ptr: self.regs_ptr,
+            channel: TimerChannel::Ch2,
+        };
+        (
+            ChannelFactory {
+                regs_ptr: self.regs_ptr,
+                phantom: PhantomData
+            },
+            this
+        )
+    }
+}
+
+impl<C1: ChannelState, C2: ChannelState, C4: ChannelState> ChannelFactory<C1, C2, ChannelAvailable, C4> {
+    pub fn get_capture_ch3(self) -> (ChannelFactory<C1, C2, ChannelAllocated, C4>, TimerCaptureChannel) {
+        let this = TimerCaptureChannel {
+            regs_ptr: self.regs_ptr,
+            channel: TimerChannel::Ch3,
+        };
+        (
+            ChannelFactory {
+                regs_ptr: self.regs_ptr,
+                phantom: PhantomData
+            },
+            this
+        )
+    }
+    pub fn get_compare_ch3(&self) -> (ChannelFactory<C1, C2, ChannelAllocated, C4>, TimerCompareChannel) {
+        let this = TimerCompareChannel {
+            regs_ptr: self.regs_ptr,
+            channel: TimerChannel::Ch3,
+        };
+        (
+            ChannelFactory {
+                regs_ptr: self.regs_ptr,
+                phantom: PhantomData
+            },
+            this
+        )
+    }
+}
+
+impl<C1: ChannelState, C2: ChannelState, C3: ChannelState> ChannelFactory<C1, C2, C3, ChannelAvailable> {
+    pub fn get_capture_ch4(self) -> (ChannelFactory<C1, C2, C3, ChannelAllocated>, TimerCaptureChannel) {
+        let this = TimerCaptureChannel {
+            regs_ptr: self.regs_ptr,
+            channel: TimerChannel::Ch4,
+        };
+        (
+            ChannelFactory {
+                regs_ptr: self.regs_ptr,
+                phantom: PhantomData
+            },
+            this
+        )
+    }
+    pub fn get_compare_ch4(self) -> (ChannelFactory<C1, C2, C3, ChannelAllocated>, TimerCompareChannel) {
+        let this = TimerCompareChannel {
+            regs_ptr: self.regs_ptr,
+            channel: TimerChannel::Ch4,
+        };
+        (
+            ChannelFactory {
+                regs_ptr: self.regs_ptr,
+                phantom: PhantomData
+            },
+            this
+        )
+    }
+}
+
+pub struct MyTimer {
+    regs_ptr: *mut()
+}
+
+impl MyTimer {
+    pub fn new(ptr: *mut()) -> Self {
+        Self {
+            regs_ptr: ptr
+        }
+    }
+
+    pub fn split(self) -> ChannelFactory<ChannelAvailable, ChannelAvailable, ChannelAvailable, ChannelAvailable> {
+        ChannelFactory {
+            regs_ptr: self.regs_ptr,
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl TimerCore for MyTimer {
+    fn regs(&self) -> pac::timer::TimCore {
+        unsafe { pac::timer::TimCore::from_ptr(self.regs_ptr) }
+    }
+}
+
+pub trait TimerCore {
     fn regs(&self) -> pac::timer::TimCore;
     fn write_counter_enable(&self, val: bool) {
         self.regs().cr1().modify(|r| r.set_cen(val));
@@ -23,6 +176,46 @@ pub trait TimerInner {
     }
     fn read_update_disable(&self) -> bool {
         self.regs().cr1().read().udis()
+    }
+    fn write_update_request_source(&self, val: pac::timer::vals::Urs) {
+        self.regs().cr1().modify(|r| r.set_urs(val));
+    }
+    fn read_update_request_source(&self) -> pac::timer::vals::Urs {
+        self.regs().cr1().read().urs()
+    }
+    fn write_one_pulse_mode(&self, val: bool) {
+        self.regs().cr1().modify(|r| r.set_opm(val));
+    }
+    fn read_one_pulse_mode(&self) -> bool {
+        self.regs().cr1().read().opm()
+    }
+    fn write_autoreload_preload_enable(&self, val: bool) {
+        self.regs().cr1().modify(|r| r.set_arpe(val))
+    }
+    fn read_autoreload_preload_enable(&self) -> bool {
+        self.regs().cr1().read().arpe()
+    }
+}
+
+pub trait TimerGp16: TimerCore {
+    fn regs_gp16(&self) -> pac::timer::TimGp16;
+    fn write_direction(&self, val: pac::timer::vals::Dir) {
+        self.regs_gp16().cr1().modify(|r| r.set_dir(val))
+    }
+    fn read_direction(&self) -> pac::timer::vals::Dir {
+        self.regs_gp16().cr1().read().dir()
+    }
+    fn write_centeraligned_mode_selection(&self, val: pac::timer::vals::Cms) {
+        self.regs_gp16().cr1().modify(|r| r.set_cms(val))
+    }
+    fn read_centeraligned_mode_selection(&self) -> pac::timer::vals::Cms {
+        self.regs_gp16().cr1().read().cms()
+    }
+    fn write_clock_division(&self, val: pac::timer::vals::Ckd) {
+        self.regs_gp16().cr1().modify(|r| r.set_ckd(val))
+    }
+    fn read_clock_division(&self) -> pac::timer::vals::Ckd {
+        self.regs_gp16().cr1().read().ckd()
     }
 }
 
@@ -52,13 +245,13 @@ impl Into<usize> for TimerChannel {
     }
 }
 
+
 #[derive(Clone, Copy)]
-struct TimerInnerChannel {
+pub struct TimerCaptureChannel {
     regs_ptr: *mut(),
     channel: TimerChannel,
 }
-
-impl TimerCaptureCompareBase for TimerInnerChannel {
+impl TimerCaptureCompareBase for TimerCaptureChannel {
     fn regs(&self) -> pac::timer::TimGp16 {
         unsafe { pac::timer::TimGp16::from_ptr(self.regs_ptr) }
     }
@@ -71,16 +264,25 @@ impl TimerCaptureCompareBase for TimerInnerChannel {
         }
     }
 }
-
-#[derive(Clone, Copy)]
-pub struct TimerCaptureChannel {
-    inner: TimerInnerChannel
-}
 impl TimerCapture for TimerCaptureChannel {}
 
 #[derive(Clone, Copy)]
 pub struct TimerCompareChannel {
-    inner: TimerInnerChannel
+    regs_ptr: *mut(),
+    channel: TimerChannel,
+}
+impl TimerCaptureCompareBase for TimerCompareChannel {
+    fn regs(&self) -> pac::timer::TimGp16 {
+        unsafe { pac::timer::TimGp16::from_ptr(self.regs_ptr) }
+    }
+    fn ch(&self) -> usize {
+        match self.channel {
+            TimerChannel::Ch1 => 0,
+            TimerChannel::Ch2 => 0,
+            TimerChannel::Ch3 => 0,
+            TimerChannel::Ch4 => 0,
+        }
+    }
 }
 impl TimerCompare for TimerCompareChannel {}
 
