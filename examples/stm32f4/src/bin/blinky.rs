@@ -158,14 +158,14 @@ impl MyTimer {
 }
 
 impl TimerCore for MyTimer {
-    fn regs(&self) -> pac::timer::TimCore {
-        unsafe { pac::timer::TimCore::from_ptr(self.regs_ptr) }
+    fn regs(&self) -> pac::timer::TimGp16 {
+        unsafe { pac::timer::TimGp16::from_ptr(self.regs_ptr) }
     }
 }
 
 pub trait TimerCore {
-    // TIM2,3,4,5,9,12
-    fn regs(&self) -> pac::timer::TimCore;
+    // TIM2,3,4,5,9,10,11,12,13,14
+    fn regs(&self) -> pac::timer::TimGp16;
 
     fn write_counter_enable(&self, val: bool) {
         self.regs().cr1().modify(|r| r.set_cen(val));
@@ -185,19 +185,13 @@ pub trait TimerCore {
     fn read_update_request_source(&self) -> pac::timer::vals::Urs {
         self.regs().cr1().read().urs()
     }
-    fn write_one_pulse_mode(&self, val: bool) {
-        self.regs().cr1().modify(|r| r.set_opm(val));
-    }
-    fn read_one_pulse_mode(&self) -> bool {
-        self.regs().cr1().read().opm()
-    }
     fn write_autoreload_preload_enable(&self, val: bool) {
         self.regs().cr1().modify(|r| r.set_arpe(val))
     }
     fn read_autoreload_preload_enable(&self) -> bool {
         self.regs().cr1().read().arpe()
     }
-    
+
     fn write_update_interrupt_enable(&self, val: bool) {
         self.regs().dier().modify(|r| r.set_uie(val))
     }
@@ -238,110 +232,251 @@ pub trait TimerCore {
     }
 }
 
-pub trait TimerCore2: TimerCore {
-    // TIM2,3,4,5,9,12 - external trigger
-    fn regs_gp16(&self) -> pac::timer::TimGp16;
-
-    fn write_clock_division(&self, val: pac::timer::vals::Ckd) {
-        self.regs_gp16().cr1().modify(|r| r.set_ckd(val))
+pub trait TimerOnePulse: TimerCore {
+    fn write_one_pulse_mode(&self, val: bool) {
+        self.regs().cr1().modify(|r| r.set_opm(val));
     }
-    fn read_clock_division(&self) -> pac::timer::vals::Ckd {
-        self.regs_gp16().cr1().read().ckd()
-    }
-
-    fn write_trigger_interrupt_enable(&self, val: bool) {
-        self.regs_gp16().dier().modify(|r| r.set_tie(val));
-    }
-    fn read_trigger_interrupt_enable(&self) -> bool {
-        self.regs_gp16().dier().read().tie()
-    }
-    
-    fn write_trigger_interrupt_flag(&self, val: bool) {
-        self.regs_gp16().sr().modify(|r| r.set_tif(val));
-    }
-    fn read_trigger_interrupt_flag(&self) -> bool {
-        self.regs_gp16().sr().read().tif()
-    }
-    
-    fn write_trigger_generation(&self) {
-        self.regs_gp16().egr().write(|r| r.set_tg(true))
+    fn read_one_pulse_mode(&self) -> bool {
+        self.regs().cr1().read().opm()
     }
 }
 
-pub trait TimerGp16: TimerCore2 {
-    // TIM2,3,4,5 - center-aligned mode / encoder mode
-    fn write_direction(&self, val: pac::timer::vals::Dir) {
-        self.regs_gp16().cr1().modify(|r| r.set_dir(val))
-    }
-    fn read_direction(&self) -> pac::timer::vals::Dir {
-        self.regs_gp16().cr1().read().dir()
-    }
-    fn write_centeraligned_mode_selection(&self, val: pac::timer::vals::Cms) {
-        self.regs_gp16().cr1().modify(|r| r.set_cms(val))
-    }
-    fn read_centeraligned_mode_selection(&self) -> pac::timer::vals::Cms {
-        self.regs_gp16().cr1().read().cms()
-    }
+pub trait TimerMasterMode: TimerCore {
     fn write_master_mode_selection(&self, val: pac::timer::vals::Mms) {
-        self.regs_gp16().cr2().modify(|r| r.set_mms(val));
+        self.regs().cr2().modify(|r| r.set_mms(val));
     }
     fn read_master_mode_selection(&self) -> pac::timer::vals::Mms {
-        self.regs_gp16().cr2().read().mms()
+        self.regs().cr2().read().mms()
+    }
+}
+
+pub trait TimerCore2: TimerCore {
+    // TIM2,3,4,5,9,10,11,12,13,14
+
+    fn write_clock_division(&self, val: pac::timer::vals::Ckd) {
+        self.regs().cr1().modify(|r| r.set_ckd(val))
+    }
+    fn read_clock_division(&self) -> pac::timer::vals::Ckd {
+        self.regs().cr1().read().ckd()
+    }
+}
+
+pub trait TimerTrigger: TimerCore2 {
+    // TIM2,3,4,5,9,12 - external trigger
+
+    fn write_slave_mode_selection(&self, val: pac::timer::vals::Sms) {
+        self.regs().smcr().modify(|r| r.set_sms(val))
+    }
+    fn read_slave_mode_selection(&self) -> pac::timer::vals::Sms {
+        self.regs().smcr().read().sms()
+    }
+    fn write_trigger_selection(&self, val: pac::timer::vals::Ts) {
+        self.regs().smcr().modify(|r| r.set_ts(val))
+    }
+    fn read_trigger_selection(&self) -> pac::timer::vals::Ts {
+        self.regs().smcr().read().ts()
+    }
+    fn write_master_slave_mode(&self, val: pac::timer::vals::Msm) {
+        self.regs().smcr().modify(|r| r.set_msm(val))
+    }
+    fn read_master_slave_mode(&self) -> pac::timer::vals::Msm {
+        self.regs().smcr().read().msm()
+    }
+
+    fn write_trigger_interrupt_enable(&self, val: bool) {
+        self.regs().dier().modify(|r| r.set_tie(val));
+    }
+    fn read_trigger_interrupt_enable(&self) -> bool {
+        self.regs().dier().read().tie()
+    }
+    
+    fn write_trigger_interrupt_flag(&self, val: bool) {
+        self.regs().sr().modify(|r| r.set_tif(val));
+    }
+    fn read_trigger_interrupt_flag(&self) -> bool {
+        self.regs().sr().read().tif()
+    }
+    
+    fn write_trigger_generation(&self) {
+        self.regs().egr().write(|r| r.set_tg(true))
+    }
+}
+
+pub trait TimerExternalTrigger: TimerCore {
+    fn write_external_trigger_filter(&self, val: pac::timer::vals::FilterValue) {
+        self.regs().smcr().modify(|r| r.set_etf(val))
+    }
+    fn read_external_trigger_filter(&self) -> pac::timer::vals::FilterValue {
+        self.regs().smcr().read().etf()
+    }
+    fn write_external_trigger_prescaler(&self, val: pac::timer::vals::Etps) {
+        self.regs().smcr().modify(|r| r.set_etps(val))
+    }
+    fn read_external_trigger_prescaler(&self) -> pac::timer::vals::Etps {
+        self.regs().smcr().read().etps()
+    }
+    fn write_external_clock_enable(&self, val: bool) {
+        self.regs().smcr().modify(|r| r.set_ece(val))
+    }
+    fn read_external_clock_enable(&self) -> bool {
+        self.regs().smcr().read().ece()
+    }
+    fn write_external_trigger_polarity(&self, val: pac::timer::vals::Etp) {
+        self.regs().smcr().modify(|r| r.set_etp(val))
+    }
+    fn read_external_trigger_polarity(&self) -> pac::timer::vals::Etp {
+        self.regs().smcr().read().etp()
+    }
+}
+
+pub trait TimerGp16: TimerTrigger {
+    // TIM2,3,4,5 - center-aligned mode / encoder mode
+    fn write_direction(&self, val: pac::timer::vals::Dir) {
+        self.regs().cr1().modify(|r| r.set_dir(val))
+    }
+    fn read_direction(&self) -> pac::timer::vals::Dir {
+        self.regs().cr1().read().dir()
+    }
+    fn write_centeraligned_mode_selection(&self, val: pac::timer::vals::Cms) {
+        self.regs().cr1().modify(|r| r.set_cms(val))
+    }
+    fn read_centeraligned_mode_selection(&self) -> pac::timer::vals::Cms {
+        self.regs().cr1().read().cms()
     }
     fn write_ti1_selection(&self, val: pac::timer::vals::Ti1s) {
-        self.regs_gp16().cr2().modify(|r| r.set_ti1s(val))
+        self.regs().cr2().modify(|r| r.set_ti1s(val))
     }
     fn read_ti1_selection(&self) -> pac::timer::vals::Ti1s {
-        self.regs_gp16().cr2().read().ti1s()
+        self.regs().cr2().read().ti1s()
     }
 }
 
 pub trait TimerWithDMA: TimerGp16 {
     // TIM2,3,4,5
     fn write_dma_selection(&self, val: pac::timer::vals::Ccds) {
-        self.regs_gp16().cr2().modify(|r| r.set_ccds(val));
+        self.regs().cr2().modify(|r| r.set_ccds(val));
     }
     fn read_dma_selection(&self) -> pac::timer::vals::Ccds {
-        self.regs_gp16().cr2().read().ccds()
+        self.regs().cr2().read().ccds()
     }
 
     fn write_update_dms_request_enable(&self, val: bool) {
-        self.regs_gp16().dier().modify(|r| r.set_ude(val));
+        self.regs().dier().modify(|r| r.set_ude(val));
     }
     fn read_update_dma_request_enable(&self)-> bool {
-        self.regs_gp16().dier().read().ude()
+        self.regs().dier().read().ude()
     }
     fn write_trigger_dma_request_enable(&self, val: bool) {
-        self.regs_gp16().dier().modify(|r| r.set_tde(val));
+        self.regs().dier().modify(|r| r.set_tde(val));
     }
     fn read_trigger_dma_update_enable(&self)-> bool {
-        self.regs_gp16().dier().read().tde()
+        self.regs().dier().read().tde()
     }
 
     fn write_dma_base_address(&self, val: u8) {
-        self.regs_gp16().dcr().modify(|r| r.set_dba(val));
+        self.regs().dcr().modify(|r| r.set_dba(val));
     }
     fn read_dma_base_address(&self) -> u8 {
-        self.regs_gp16().dcr().read().dba()
+        self.regs().dcr().read().dba()
     }
     fn write_dma_burst_length(&self, val: u8) -> Result<(), ()> {
         if val < 18 {
-            self.regs_gp16().dcr().modify(|r| r.set_dbl(val));
+            self.regs().dcr().modify(|r| r.set_dbl(val));
             Ok(())
         } else {
             Err(())
         }
     }
     fn read_dma_burst_length(&self) -> u8 {
-        self.regs_gp16().dcr().read().dbl()
+        self.regs().dcr().read().dbl()
     }
     fn write_dma_register_burst_accesses(&self, val: u16) {
-        self.regs_gp16().dmar().modify(|r| r.set_dmab(val))
+        self.regs().dmar().modify(|r| r.set_dmab(val))
     }
     fn read_dma_register_burst_accesses(&self) -> u16 {
-        self.regs_gp16().dmar().read().dmab()
+        self.regs().dmar().read().dmab()
     }
 }
+
+
+pub struct Tim6_7
+{
+    regs_ptr: *mut(),
+}
+
+impl TimerCore for Tim6_7 {
+    fn regs(&self) -> pac::timer::TimGp16 {
+        unsafe { pac::timer::TimGp16::from_ptr(self.regs_ptr) }
+    }
+}
+impl TimerOnePulse for Tim6_7 {}
+impl TimerMasterMode for Tim6_7 {}
+
+
+pub struct Tim10_11_13_14
+{
+    regs_ptr: *mut(),
+}
+
+impl Tim10_11_13_14 {
+    pub fn split(self) -> ChannelFactory<ChannelAvailable, ChannelAllocated, ChannelAllocated, ChannelAllocated> {
+        // only 1 channel
+        ChannelFactory {
+            regs_ptr: self.regs_ptr,
+            phantom: PhantomData
+        }
+    }
+}
+impl TimerCore for Tim10_11_13_14 {
+    fn regs(&self) -> pac::timer::TimGp16 {
+        unsafe { pac::timer::TimGp16::from_ptr(self.regs_ptr) }
+    }
+}
+
+pub struct Tim9_12 {
+    regs_ptr: *mut(),
+}
+impl Tim9_12 {
+    pub fn split(self) -> ChannelFactory<ChannelAvailable, ChannelAvailable, ChannelAllocated, ChannelAllocated> {
+        // only 2 channels
+        ChannelFactory {
+            regs_ptr: self.regs_ptr,
+            phantom: PhantomData
+        }
+    }
+}
+impl TimerCore for Tim9_12 {
+    fn regs(&self) -> pac::timer::TimGp16 {
+        unsafe { pac::timer::TimGp16::from_ptr(self.regs_ptr) }
+    }
+}
+impl TimerCore2 for Tim9_12 {}
+impl TimerOnePulse for Tim9_12 {}
+impl TimerTrigger for Tim9_12 {}
+
+pub struct Tim2_3_4_5 {
+    regs_ptr: *mut(),
+}
+impl Tim2_3_4_5 {
+    pub fn split(self) -> ChannelFactory<ChannelAvailable, ChannelAvailable, ChannelAvailable, ChannelAvailable> {
+        // all 4 channels
+        ChannelFactory {
+            regs_ptr: self.regs_ptr,
+            phantom: PhantomData
+        }
+    }
+}
+impl TimerCore for Tim2_3_4_5 {
+    fn regs(&self) -> pac::timer::TimGp16 {
+        unsafe { pac::timer::TimGp16::from_ptr(self.regs_ptr) }
+    }
+}
+impl TimerCore2 for Tim2_3_4_5 {}
+impl TimerOnePulse for Tim2_3_4_5 {}
+impl TimerMasterMode for Tim2_3_4_5 {}
+impl TimerTrigger for Tim2_3_4_5 {}
+impl TimerGp16 for Tim2_3_4_5 {}
+impl TimerWithDMA for Tim2_3_4_5 {}
 
 pub enum CaptureInputPolarity {
     RisingEdge,
