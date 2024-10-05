@@ -1,12 +1,30 @@
 #![no_std]
 #![no_main]
 
+use core::marker::PhantomData;
+
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
 use embassy_stm32::pac;
+
+pub trait TimerInner {
+    fn regs(&self) -> pac::timer::TimCore;
+    fn write_counter_enable(&self, val: bool) {
+        self.regs().cr1().modify(|r| r.set_cen(val));
+    }
+    fn read_counter_enable(&self) -> bool {
+        self.regs().cr1().read().cen()
+    }
+    fn write_update_disable(&self, val: bool) {
+        self.regs().cr1().modify(|r| r.set_udis(val));
+    }
+    fn read_update_disable(&self) -> bool {
+        self.regs().cr1().read().udis()
+    }
+}
 
 pub enum CaptureInputPolarity {
     RisingEdge,
@@ -16,151 +34,150 @@ pub enum CaptureInputPolarity {
 }
 
 #[derive(Clone, Copy)]
-pub struct TimerCaptureCompare {
-    regs: *mut(),
-    ch: usize,
+pub enum TimerChannel {
+    Ch1,
+    Ch2,
+    Ch3,
+    Ch4,
 }
 
-impl TimerCaptureCompare {
-    fn regs_core(self) -> pac::timer::TimGp16 {
-        unsafe { crate::pac::timer::TimGp16::from_ptr(self.regs) }
+impl Into<usize> for TimerChannel {
+    fn into(self) -> usize {
+        match self {
+            TimerChannel::Ch1=>0,
+            TimerChannel::Ch2=>1,
+            TimerChannel::Ch3=>2,
+            TimerChannel::Ch4=>3,
+        }
     }
-    pub fn write_dma_request_enable(&self, val: bool) {
-        self.regs_core().dier().modify(|r| r.set_ccde(self.ch, val));
+}
+
+#[derive(Clone, Copy)]
+struct TimerInnerChannel {
+    regs_ptr: *mut(),
+    channel: TimerChannel,
+}
+
+impl TimerCaptureCompareBase for TimerInnerChannel {
+    fn regs(&self) -> pac::timer::TimGp16 {
+        unsafe { pac::timer::TimGp16::from_ptr(self.regs_ptr) }
     }
-    pub fn read_dma_request_enable(&self) -> bool {
-        self.regs_core().dier().read().ccde(self.ch)
+    fn ch(&self) -> usize {
+        match self.channel {
+            TimerChannel::Ch1 => 0,
+            TimerChannel::Ch2 => 0,
+            TimerChannel::Ch3 => 0,
+            TimerChannel::Ch4 => 0,
+        }
     }
-    pub fn write_interrupt_enable(&self, val: bool) {
-        self.regs_core().dier().modify(|r| r.set_ccie(self.ch, val));
+}
+
+#[derive(Clone, Copy)]
+pub struct TimerCaptureChannel {
+    inner: TimerInnerChannel
+}
+impl TimerCapture for TimerCaptureChannel {}
+
+#[derive(Clone, Copy)]
+pub struct TimerCompareChannel {
+    inner: TimerInnerChannel
+}
+impl TimerCompare for TimerCompareChannel {}
+
+pub trait TimerCaptureCompareBase {
+    fn regs(&self) -> pac::timer::TimGp16;
+    fn ch(&self) -> usize;
+
+    fn write_dma_request_enable(&self, val: bool) {
+        self.regs().dier().modify(|r| r.set_ccde(self.ch(), val));
     }
-    pub fn read_interrupt_enable(&self) -> bool {
-        self.regs_core().dier().read().ccie(self.ch)
+    fn read_dma_request_enable(&self) -> bool {
+        self.regs().dier().read().ccde(self.ch())
     }
-    pub fn write_interrupt_flag(&self) {
+    fn write_interrupt_enable(&self, val: bool) {
+        self.regs().dier().modify(|r| r.set_ccie(self.ch(), val));
+    }
+    fn read_interrupt_enable(&self) -> bool {
+        self.regs().dier().read().ccie(self.ch())
+    }
+    fn write_interrupt_flag(&self) {
         // different behavior capture compare !
-        self.regs_core().sr().modify(|r| r.set_ccif(self.ch, false)); // cleared by writing 0
+        self.regs().sr().modify(|r| r.set_ccif(self.ch(), false)); // cleared by writing 0
     }
-    pub fn read_interrupt_flag(&self) -> bool {
+    fn read_interrupt_flag(&self) -> bool {
         // different behavior capture compare !
-        self.regs_core().sr().read().ccif(self.ch)
+        self.regs().sr().read().ccif(self.ch())
     }
-    pub fn write_overcapture_flag(&self) {
-        self.regs_core().sr().modify(|r| r.set_ccof(self.ch, false)); // cleared by writing 0
+    fn write_overcapture_flag(&self) {
+        self.regs().sr().modify(|r| r.set_ccof(self.ch(), false)); // cleared by writing 0
     }
-    pub fn read_overcapture_flag(&self) -> bool {
-        self.regs_core().sr().read().ccof(self.ch)
+    fn read_overcapture_flag(&self) -> bool {
+        self.regs().sr().read().ccof(self.ch())
     }
-    pub fn write_generation(&self) {
+    fn write_generation(&self) {
         // different behavior capture compare !
         // egr is write only !
-        self.regs_core().egr().write(|r| r.set_ccg(self.ch, true));
+        self.regs().egr().write(|r| r.set_ccg(self.ch(), true));
     }
-    // output mode
-    fn ccmr_output(&self) -> pac::common::Reg<pac::timer::regs::CcmrOutputGp16, pac::common::RW> {
-        self.regs_core().ccmr_output(self.ch / 2)
-    }
-    pub fn write_selection_output(&self, val: pac::timer::vals::CcmrOutputCcs) {
-        self.ccmr_output().modify(|r| r.set_ccs(self.ch % 2, val))
-    }
-    pub fn read_selection_output(&self) -> pac::timer::vals::CcmrOutputCcs {
-        self.ccmr_output().read().ccs(self.ch % 2)
-    }
-    pub fn write_fast_enable(&self, val: bool) {
-        self.ccmr_output().modify(|r| r.set_ocfe(self.ch % 2, val))
-    }
-    pub fn read_fast_enable(&self) -> bool {
-        self.ccmr_output().read().ocfe(self.ch % 2)
-    }
-    pub fn write_preload_enable(&self, val: bool) {
-        self.ccmr_output().modify(|r| r.set_ocpe(self.ch % 2, val));
-    }
-    pub fn read_preload_enable(&self) -> bool {
-        self.ccmr_output().read().ocpe(self.ch % 2)
-    }
-    pub fn write_mode(&self, val: pac::timer::vals::Ocm) {
-        self.ccmr_output().modify(|r| r.set_ocm(self.ch % 2, val));
-    }
-    pub fn read_mode(&self) -> pac::timer::vals::Ocm {
-        self.ccmr_output().read().ocm(self.ch % 2)
-    }
-    pub fn write_clear_enable(&self, val: bool) {
-        self.ccmr_output().modify(|r| r.set_occe(self.ch % 2, val))
-    }
-    pub fn read_clear_enable(&self) -> bool {
-        self.ccmr_output().read().occe(self.ch % 2)
-    }
-    // input mode
+}
+
+pub trait TimerCapture: TimerCaptureCompareBase {
     fn ccmr_input(&self) -> pac::common::Reg<pac::timer::regs::CcmrInput2ch, pac::common::RW> {
-        self.regs_core().ccmr_input(self.ch / 2)
+        self.regs().ccmr_input(self.ch() / 2)
     }
-    pub fn write_selection_input(&self, val: pac::timer::vals::CcmrInputCcs) {
-        self.ccmr_input().modify(|r| r.set_ccs(self.ch % 2, val))
+    fn write_selection_input(&self, val: pac::timer::vals::CcmrInputCcs) {
+        self.ccmr_input().modify(|r| r.set_ccs(self.ch() % 2, val))
     }
-    pub fn read_selection_input(&self) -> pac::timer::vals::CcmrInputCcs {
-        self.ccmr_input().read().ccs(self.ch % 2)
+    fn read_selection_input(&self) -> pac::timer::vals::CcmrInputCcs {
+        self.ccmr_input().read().ccs(self.ch() % 2)
     }
-    pub fn write_prescaler(&self, val: u8) {
+    fn write_prescaler(&self, val: u8) {
         // 0=every event, 1=every 2 events, 2=every 4 events, 3=every 8 events
-        self.ccmr_input().modify(|r| r.set_icpsc(self.ch % 2, val));
+        self.ccmr_input().modify(|r| r.set_icpsc(self.ch() % 2, val));
     }
-    pub fn read_prescaler(&self) -> u8 {
-        self.ccmr_input().read().icpsc(self.ch % 2)
+    fn read_prescaler(&self) -> u8 {
+        self.ccmr_input().read().icpsc(self.ch() % 2)
     }
-    pub fn write_filter(&self, val: pac::timer::vals::FilterValue) {
-        self.ccmr_input().modify(|r| r.set_icf(self.ch % 2, val))
+    fn write_filter(&self, val: pac::timer::vals::FilterValue) {
+        self.ccmr_input().modify(|r| r.set_icf(self.ch() % 2, val))
     }
-    pub fn read_filter(&self) -> pac::timer::vals::FilterValue {
-        self.ccmr_input().read().icf(self.ch % 2)
+    fn read_filter(&self) -> pac::timer::vals::FilterValue {
+        self.ccmr_input().read().icf(self.ch() % 2)
     }
-    pub fn write_output_enable(&self, val: bool) {
-        self.regs_core().ccer().modify(|r| r.set_cce(self.ch, val))
+    fn write_capture_enable(&self, val: bool) {
+        self.regs().ccer().modify(|r| r.set_cce(self.ch(), val))
     }
-    pub fn read_output_enable(&self) -> bool {
-        self.regs_core().ccer().read().cce(self.ch)
+    fn read_capture_enable(&self) -> bool {
+        self.regs().ccer().read().cce(self.ch())
     }
-    pub fn write_capture_enable(&self, val: bool) {
-        self.write_output_enable(val);
-    }
-    pub fn read_capture_enable(&self) -> bool {
-        self.read_output_enable()
-    }
-    pub fn write_output_polarity(&self, val: bool) {
-        // only ouput
-        self.regs_core().ccer().modify(|r| r.set_ccp(self.ch, val));
-    }
-    pub fn read_output_polarity(&self) -> bool {
-        // only ouput
-        self.regs_core().ccer().read().ccp(self.ch)
-    }
-    pub fn write_input_polarity(&self, val: CaptureInputPolarity) {
-        self.regs_core().ccer().modify(|r| match val {
+    fn write_input_polarity(&self, val: CaptureInputPolarity) {
+        self.regs().ccer().modify(|r| match val {
                 CaptureInputPolarity::RisingEdge => {
                     // ccnp/ccp = 00
-                    r.set_ccnp(self.ch, false);
-                    r.set_ccp(self.ch, false);
+                    r.set_ccnp(self.ch(), false);
+                    r.set_ccp(self.ch(), false);
                 },
                 CaptureInputPolarity::FallingEdge => {
                     // ccnp/ccp = 01
-                    r.set_ccnp(self.ch, false);
-                    r.set_ccp(self.ch, true);
+                    r.set_ccnp(self.ch(), false);
+                    r.set_ccp(self.ch(), true);
                 },
                 CaptureInputPolarity::Reserved => {
                     // ccnp/ccp = 10
-                    r.set_ccnp(self.ch, true);
-                    r.set_ccp(self.ch, false);
+                    r.set_ccnp(self.ch(), true);
+                    r.set_ccp(self.ch(), false);
                 }
                 CaptureInputPolarity::BothEdge => {
                     // ccnp/ccp = 11
-                    r.set_ccnp(self.ch, true);
-                    r.set_ccp(self.ch, true);
+                    r.set_ccnp(self.ch(), true);
+                    r.set_ccp(self.ch(), true);
                 },
             }
         )
     }
-    pub fn read_input_polarity(&self) -> CaptureInputPolarity {
-        let ccp = self.regs_core().ccer().read().ccp(self.ch);
-        let ccnp = self.regs_core().ccer().read().ccp(self.ch);
+    fn read_input_polarity(&self) -> CaptureInputPolarity {
+        let ccp = self.regs().ccer().read().ccp(self.ch());
+        let ccnp = self.regs().ccer().read().ccp(self.ch());
         match (ccnp, ccp) {
             (false, false) => CaptureInputPolarity::RisingEdge,
             (false, true) => CaptureInputPolarity::FallingEdge,
@@ -168,14 +185,65 @@ impl TimerCaptureCompare {
             (true, true) => CaptureInputPolarity::BothEdge,
         }
     }
-    pub fn write_compare_value(&self, val: u16) {
-        self.regs_core().ccr(self.ch).write(|r| r.set_ccr(val))
+    fn write_capture_value(&self, val: u16) {
+        self.regs().ccr(self.ch()).write(|r| r.set_ccr(val))
     }
-    pub fn read_compare_value(&self) -> u16 {
-        self.regs_core().ccr(self.ch).read().ccr()
+    fn read_capture_value(&self) -> u16 {
+        self.regs().ccr(self.ch()).read().ccr()
     }
-    pub fn read_capture_value(&self) -> u16 {
-        self.read_compare_value()
+}
+
+pub trait TimerCompare: TimerCaptureCompareBase {
+    fn ccmr_output(&self) -> pac::common::Reg<pac::timer::regs::CcmrOutputGp16, pac::common::RW> {
+        self.regs().ccmr_output(self.ch() / 2)
+    }
+    fn write_selection_output(&self, val: pac::timer::vals::CcmrOutputCcs) {
+        self.ccmr_output().modify(|r| r.set_ccs(self.ch() % 2, val))
+    }
+    fn read_selection_output(&self) -> pac::timer::vals::CcmrOutputCcs {
+        self.ccmr_output().read().ccs(self.ch() % 2)
+    }
+    fn write_fast_enable(&self, val: bool) {
+        self.ccmr_output().modify(|r| r.set_ocfe(self.ch() % 2, val))
+    }
+    fn read_fast_enable(&self) -> bool {
+        self.ccmr_output().read().ocfe(self.ch() % 2)
+    }
+    fn write_preload_enable(&self, val: bool) {
+        self.ccmr_output().modify(|r| r.set_ocpe(self.ch() % 2, val));
+    }
+    fn read_preload_enable(&self) -> bool {
+        self.ccmr_output().read().ocpe(self.ch() % 2)
+    }
+    fn write_mode(&self, val: pac::timer::vals::Ocm) {
+        self.ccmr_output().modify(|r| r.set_ocm(self.ch() % 2, val));
+    }
+    fn read_mode(&self) -> pac::timer::vals::Ocm {
+        self.ccmr_output().read().ocm(self.ch() % 2)
+    }
+    fn write_clear_enable(&self, val: bool) {
+        self.ccmr_output().modify(|r| r.set_occe(self.ch() % 2, val))
+    }
+    fn read_clear_enable(&self) -> bool {
+        self.ccmr_output().read().occe(self.ch() % 2)
+    }
+    fn write_output_enable(&self, val: bool) {
+        self.regs().ccer().modify(|r| r.set_cce(self.ch(), val))
+    }
+    fn read_output_enable(&self) -> bool {
+        self.regs().ccer().read().cce(self.ch())
+    }
+    fn write_output_polarity(&self, val: bool) {
+        self.regs().ccer().modify(|r| r.set_ccp(self.ch(), val));
+    }
+    fn read_output_polarity(&self) -> bool {
+        self.regs().ccer().read().ccp(self.ch())
+    }
+    fn write_compare_value(&self, val: u16) {
+        self.regs().ccr(self.ch()).write(|r| r.set_ccr(val))
+    }
+    fn read_compare_value(&self) -> u16 {
+        self.regs().ccr(self.ch()).read().ccr()
     }
 }
 
